@@ -5,6 +5,25 @@ Crawl4AI FastAPI entry‑point
 • Rate‑limiting, security, metrics
 • /crawl, /crawl/stream, /md, /llm endpoints
 """
+import os
+import sys
+
+# 在导入 crawl4ai 之前，强行修改它的默认路径
+# 这是在应用层面解决库设计问题的最终手段
+try:
+    # 这是一个小技巧，我们先伪造一个模块，让后续导入时使用我们定义的值
+    class FakeCrawl4aiDbModule:
+        # Hugging Face Spaces 提供 /data 目录作为可写持久化存储
+        DB_PATH = "/data/.crawl4ai/crawl4ai.db"
+
+    sys.modules['crawl4ai.async_database'] = FakeCrawl4aiDbModule
+
+    # 创建这个目录，确保它存在
+    os.makedirs(os.path.dirname(FakeCrawl4aiDbModule.DB_PATH), exist_ok=True)
+    print(f"--- Patched crawl4ai DB_PATH to: {FakeCrawl4aiDbModule.DB_PATH} ---")
+
+except Exception as e:
+    print(f"--- Failed to patch crawl4ai DB_PATH: {e} ---")
 
 # ── stdlib & 3rd‑party imports ───────────────────────────────
 from crawler_pool import get_crawler, close_all, janitor
