@@ -190,7 +190,7 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
     curl -f http://localhost:11235/health || exit 1'
 
 EXPOSE 6379
-RUN mkdir -p /.crawl4ai && chown -R appuser:appuser /.crawl4ai
+
 # Switch to the non-root user before starting the application
 USER appuser
 
