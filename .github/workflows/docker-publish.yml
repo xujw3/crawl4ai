@@ -38,9 +38,16 @@ jobs:
         id: meta
         uses: docker/metadata-action@v5
         with:
-          # 修改为您想在 Docker Hub 上使用的镜像名称
-          # 推荐格式：<你的用户名>/<你的应用名>
+          # 镜像名称保持不变
           images: ${{ secrets.DOCKERHUB_USERNAME }}/my-crawl-app
+          # 自定义标签生成规则
+          tags: |
+            # 1. 当事件是推送到默认分支 (通常是'main') 时，生成 'latest' 标签
+            type=raw,value=latest,enable={{is_default_branch}}
+            # 2. 同时，保留按分支名生成标签的规则
+            type=ref,event=branch
+            # 3. 额外增加一个按 commit SHA 生成的标签，用于精确追踪版本
+            type=sha,prefix=,suffix=,format=short
 
       # 第五步：构建 Docker 镜像并推送到 Docker Hub
       - name: Build and push Docker image
