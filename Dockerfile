@@ -1,7 +1,7 @@
 FROM python:3.12-slim-bookworm AS build
 
 # C4ai version
-ARG C4AI_VER=0.6.0
+ARG C4AI_VER=0.6.3
 ENV C4AI_VERSION=$C4AI_VER
 LABEL c4ai.version=$C4AI_VER
 
@@ -190,6 +190,7 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
     curl -f http://localhost:11235/health || exit 1'
 
 EXPOSE 6379
+RUN mkdir -p /.crawl4ai && chown -R appuser:appuser /.crawl4ai
 # Switch to the non-root user before starting the application
 USER appuser
 
