@@ -20,11 +20,16 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # 第二步：设置 Docker Buildx，以便使用缓存等高级功能
+      # 第二步：设置 QEMU 以便在 amd64 的 runner 上构建 arm64 镜像
+      # 这是多平台构建的关键前置步骤
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      # 第三步：设置 Docker Buildx，以便使用缓存等高级功能
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      # 第三步：登录到 Docker Hub
+      # 第四步：登录到 Docker Hub
       # 使用您在 GitHub Secrets 中设置的用户名和 Token
       - name: Log in to Docker Hub
         uses: docker/login-action@v3
@@ -32,15 +37,14 @@ jobs:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
-      # 第四步：提取 Docker 元数据（如标签和标签）
+      # 第五步：提取 Docker 元数据（如标签）
       # 这会自动为您的镜像创建标签，例如 'latest', 'sha-xxxxxxx'
       - name: Extract metadata (tags, labels) for Docker
         id: meta
         uses: docker/metadata-action@v5
         with:
-          # 镜像名称保持不变
-          images: ${{ secrets.DOCKERHUB_USERNAME }}/my-crawl-app
-          # 自定义标签生成规则
+          # 镜像名建议与项目名保持一致
+          images: ${{ secrets.DOCKERHUB_USERNAME }}/crawl4ai
           tags: |
             # 1. 当事件是推送到默认分支 (通常是'main') 时，生成 'latest' 标签
             type=raw,value=latest,enable={{is_default_branch}}
@@ -49,17 +53,21 @@ jobs:
             # 3. 额外增加一个按 commit SHA 生成的标签，用于精确追踪版本
             type=sha,prefix=,suffix=,format=short
 
-      # 第五步：构建 Docker 镜像并推送到 Docker Hub
+      # 第六步：构建 Docker 镜像并推送到 Docker Hub (核心优化部分)
       - name: Build and push Docker image
         uses: docker/build-push-action@v5
         with:
-          # 构建上下文为当前目录
           context: .
-          # 开启推送
-          push: true
-          # 使用上一步生成的标签
+          # 开启推送，在 push 到 main 分支时生效
+          push: ${{ github.event_name != 'pull_request' }}
+          # 【优化点 1】指定要构建的平台
+          platforms: linux/amd64,linux/arm64
+          # 【优化点 2】添加构建参数
+          build-args: |
+            INSTALL_TYPE=all
+            ENABLE_GPU=false
+          # 使用上一步生成的标签和标签
           tags: ${{ steps.meta.outputs.tags }}
-          # 使用上一步生成的标签
           labels: ${{ steps.meta.outputs.labels }}
           # 启用 GitHub Actions 的构建缓存，以加快后续构建速度
           cache-from: type=gha
