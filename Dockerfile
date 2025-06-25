@@ -1,36 +1,24 @@
-FROM python:3.12-slim-bookworm AS build
+# Dockerfile
 
-# C4ai version
-ARG C4AI_VER=0.6.3
-ENV C4AI_VERSION=$C4AI_VER
-LABEL c4ai.version=$C4AI_VER
+# ==============================================================================
+# STAGE 1: Builder - Installs all dependencies and builds the application
+# ==============================================================================
+FROM python:3.12-slim-bookworm AS builder
 
-# Set build arguments
-ARG APP_HOME=/app
-ARG GITHUB_REPO=https://github.com/unclecode/crawl4ai.git
-ARG GITHUB_BRANCH=main
-ARG USE_LOCAL=true
-
+# Set Environment Variables
 ENV PYTHONFAULTHANDLER=1 \
-    PYTHONHASHSEED=random \
     PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1 \
     PYTHONDONTWRITEBYTECODE=1 \
-    PIP_DISABLE_PIP_VERSION_CHECK=1 \
-    PIP_DEFAULT_TIMEOUT=100 \
-    DEBIAN_FRONTEND=noninteractive \
-    REDIS_HOST=localhost \
-    REDIS_PORT=6379
+    DEBIAN_FRONTEND=noninteractive
 
-ARG PYTHON_VERSION=3.12
+# Set Build Arguments
+ARG APP_HOME=/app
 ARG INSTALL_TYPE=default
 ARG ENABLE_GPU=false
 ARG TARGETARCH
 
-LABEL maintainer="unclecode"
-LABEL description="🔥🕷️ Crawl4AI: Open-source LLM Friendly Web Crawler & scraper"
-LABEL version="1.0"
-
+# Install essential build and runtime dependencies via apt
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     curl \
@@ -43,10 +31,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libjpeg-dev \
     redis-server \
     supervisor \
-    && apt-get clean \ 
-    && rm -rf /var/lib/apt/lists/*
-
-RUN apt-get update && apt-get install -y --no-install-recommends \
+    # Playwright runtime dependencies
     libglib2.0-0 \
     libnss3 \
     libnspr4 \
@@ -64,140 +49,108 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libxfixes3 \
     libxrandr2 \
     libgbm1 \
-    libpango-1.0-0 \
-    libcairo2 \
     libasound2 \
     libatspi2.0-0 \
-    && apt-get clean \ 
+    # Platform-specific optimizations
+    && if [ "$TARGETARCH" = "arm64" ]; then apt-get install -y libopenblas-dev; \
+       elif [ "$TARGETARCH" = "amd64" ]; then apt-get install -y libomp-dev; fi \
+    # Cleanup
+    && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
-
-RUN apt-get update && apt-get dist-upgrade -y \
-    && rm -rf /var/lib/apt/lists/*
-
-RUN if [ "$ENABLE_GPU" = "true" ] && [ "$TARGETARCH" = "amd64" ] ; then \
-    apt-get update && apt-get install -y --no-install-recommends \
-    nvidia-cuda-toolkit \
-    && apt-get clean \ 
-    && rm -rf /var/lib/apt/lists/* ; \
-else \
-    echo "Skipping NVIDIA CUDA Toolkit installation (unsupported platform or GPU disabled)"; \
-fi
-
-RUN if [ "$TARGETARCH" = "arm64" ]; then \
-    echo "🦾 Installing ARM-specific optimizations"; \
-    apt-get update && apt-get install -y --no-install-recommends \
-    libopenblas-dev \
-    && apt-get clean \ 
-    && rm -rf /var/lib/apt/lists/*; \
-elif [ "$TARGETARCH" = "amd64" ]; then \
-    echo "🖥️ Installing AMD64-specific optimizations"; \
-    apt-get update && apt-get install -y --no-install-recommends \
-    libomp-dev \
-    && apt-get clean \ 
-    && rm -rf /var/lib/apt/lists/*; \
-else \
-    echo "Skipping platform-specific optimizations (unsupported platform)"; \
-fi
-
-# Create a non-root user and group
-RUN groupadd -r appuser && useradd --no-log-init -r -g appuser appuser
-
-# Create and set permissions for appuser home directory
-RUN mkdir -p /home/appuser && chown -R appuser:appuser /home/appuser
 
 WORKDIR ${APP_HOME}
 
-RUN echo '#!/bin/bash\n\
-if [ "$USE_LOCAL" = "true" ]; then\n\
-    echo "📦 Installing from local source..."\n\
-    pip install --no-cache-dir /tmp/project/\n\
-else\n\
-    echo "🌐 Installing from GitHub..."\n\
-    for i in {1..3}; do \n\
-        git clone --branch ${GITHUB_BRANCH} ${GITHUB_REPO} /tmp/crawl4ai && break || \n\
-        { echo "Attempt $i/3 failed! Taking a short break... ☕"; sleep 5; }; \n\
-    done\n\
-    pip install --no-cache-dir /tmp/crawl4ai\n\
-fi' > /tmp/install.sh && chmod +x /tmp/install.sh
+# Copy source code and requirements
+COPY . .
 
-COPY . /tmp/project/
+# Install Python dependencies based on INSTALL_TYPE
+# This creates a fully populated virtual environment in /opt/venv
+RUN python -m venv /opt/venv
+ENV PATH="/opt/venv/bin:$PATH"
 
-# Copy supervisor config first (might need root later, but okay for now)
-COPY deploy/docker/supervisord.conf .
+# Install base requirements first
+RUN pip install --no-cache-dir -r deploy/docker/requirements.txt
 
-COPY deploy/docker/requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
-
+# Install optional dependencies
 RUN if [ "$INSTALL_TYPE" = "all" ] ; then \
         pip install --no-cache-dir \
-            torch \
-            torchvision \
-            torchaudio \
-            scikit-learn \
-            nltk \
-            transformers \
-            tokenizers && \
+            torch torchvision torchaudio scikit-learn nltk transformers tokenizers && \
         python -m nltk.downloader punkt stopwords ; \
     fi
 
+# Install the crawl4ai package itself with correct extras
 RUN if [ "$INSTALL_TYPE" = "all" ] ; then \
-        pip install "/tmp/project/[all]" && \
-        python -m crawl4ai.model_loader ; \
+        pip install ".[all]" && python -m crawl4ai.model_loader ; \
     elif [ "$INSTALL_TYPE" = "torch" ] ; then \
-        pip install "/tmp/project/[torch]" ; \
+        pip install ".[torch]" ; \
     elif [ "$INSTALL_TYPE" = "transformer" ] ; then \
-        pip install "/tmp/project/[transformer]" && \
-        python -m crawl4ai.model_loader ; \
+        pip install ".[transformer]" && python -m crawl4ai.model_loader ; \
     else \
-        pip install "/tmp/project" ; \
+        pip install . ; \
     fi
 
-RUN pip install --no-cache-dir --upgrade pip && \
-    /tmp/install.sh && \
-    python -c "import crawl4ai; print('✅ crawl4ai is ready to rock!')" && \
-    python -c "from playwright.sync_api import sync_playwright; print('✅ Playwright is feeling dramatic!')"
+# Install playwright browsers
+RUN playwright install --with-deps chromium
 
+# Run setup scripts
 RUN crawl4ai-setup
 
-RUN playwright install --with-deps
+# ==============================================================================
+# STAGE 2: Final - Creates the lightweight production image
+# ==============================================================================
+FROM python:3.12-slim-bookworm AS final
 
-RUN mkdir -p /home/appuser/.cache/ms-playwright \
-    && cp -r /root/.cache/ms-playwright/chromium-* /home/appuser/.cache/ms-playwright/ \
-    && chown -R appuser:appuser /home/appuser/.cache/ms-playwright
+# Set Environment Variables
+ENV PYTHONFAULTHANDLER=1 \
+    PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    DEBIAN_FRONTEND=noninteractive \
+    REDIS_HOST=localhost \
+    REDIS_PORT=6379 \
+    PYTHON_ENV=production
 
-RUN crawl4ai-doctor
+ARG APP_HOME=/app
 
-# Copy application code
-COPY deploy/docker/* ${APP_HOME}/
+# Install only RUNTIME dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    redis-server \
+    supervisor \
+    # Playwright runtime dependencies
+    libglib2.0-0 libnss3 libnspr4 libatk1.0-0 libatk-bridge2.0-0 libcups2 libdrm2 \
+    libdbus-1-3 libxcb1 libxkbcommon0 libx11-6 libxcomposite1 libxdamage1 libxext6 \
+    libxfixes3 libxrandr2 libgbm1 libasound2 libatspi2.0-0 \
+    # Cleanup
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/*
 
-# copy the playground + any future static assets
-COPY deploy/docker/static ${APP_HOME}/static
+# Create non-root user
+RUN groupadd -r appuser && useradd --no-log-init -r -g appuser appuser
 
-# Change ownership of the application directory to the non-root user
-RUN chown -R appuser:appuser ${APP_HOME}
+WORKDIR ${APP_HOME}
 
-# give permissions to redis persistence dirs if used
-RUN mkdir -p /var/lib/redis /var/log/redis && chown -R appuser:appuser /var/lib/redis /var/log/redis
+# Copy virtual environment, playwright cache, and app code from builder stage
+COPY --from=builder /opt/venv /opt/venv
+COPY --from=builder /root/.cache/ms-playwright/ /home/appuser/.cache/ms-playwright/
+COPY --from=builder ${APP_HOME} ${APP_HOME}
 
-HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
-    CMD bash -c '\
-    MEM=$(free -m | awk "/^Mem:/{print \$2}"); \
-    if [ $MEM -lt 2048 ]; then \
-        echo "⚠️ Warning: Less than 2GB RAM available! Your container might need a memory boost! 🚀"; \
-        exit 1; \
-    fi && \
-    redis-cli ping > /dev/null && \
-    curl -f http://localhost:11235/health || exit 1'
+# Copy entrypoint and config files
+COPY deploy/docker/supervisord.conf .
+COPY deploy/docker/entrypoint.sh .
+RUN chmod +x entrypoint.sh
 
-EXPOSE 6379
+# Set ownership
+RUN chown -R appuser:appuser ${APP_HOME} \
+    && chown -R appuser:appuser /home/appuser/.cache \
+    && mkdir -p /var/lib/redis /var/log/redis \
+    && chown -R appuser:appuser /var/lib/redis /var/log/redis
 
-RUN mkdir -p /.crawl4ai && chown -R appuser:appuser /.crawl4ai
-
-# Switch to the non-root user before starting the application
+# Switch to non-root user
 USER appuser
 
-# Set environment variables to ptoduction
-ENV PYTHON_ENV=production 
+# Set PATH to use the virtual environment
+ENV PATH="/opt/venv/bin:$PATH"
 
-# Start the application using supervisord
-CMD ["supervisord", "-c", "supervisord.conf"]
+EXPOSE 6379 11235
+
+# Start the application
+CMD ["./entrypoint.sh"]
