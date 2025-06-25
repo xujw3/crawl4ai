@@ -128,29 +128,28 @@ RUN groupadd -r appuser && useradd --no-log-init -r -g appuser appuser
 
 WORKDIR ${APP_HOME}
 
-# Copy virtual environment, playwright cache, and app code from builder stage
+# Copy the virtual environment from the builder
 COPY --from=builder /opt/venv /opt/venv
+
+# Copy the Playwright browser cache from the builder to the new user's home
 COPY --from=builder /root/.cache/ms-playwright/ /home/appuser/.cache/ms-playwright/
+
+# Copy the entire application code from the builder
 COPY --from=builder ${APP_HOME} ${APP_HOME}
 
-# Copy entrypoint and config files
-COPY deploy/docker/supervisord.conf .
-COPY deploy/docker/entrypoint.sh .
-RUN chmod +x entrypoint.sh
-
-# Set ownership
+# Set correct ownership for all application files and caches
 RUN chown -R appuser:appuser ${APP_HOME} \
     && chown -R appuser:appuser /home/appuser/.cache \
     && mkdir -p /var/lib/redis /var/log/redis \
     && chown -R appuser:appuser /var/lib/redis /var/log/redis
 
-# Switch to non-root user
+# Switch to the non-root user
 USER appuser
 
-# Set PATH to use the virtual environment
+# Add the venv to the PATH
 ENV PATH="/opt/venv/bin:$PATH"
 
 EXPOSE 6379 11235
 
-# Start the application
-CMD ["./entrypoint.sh"]
+# Start the application using supervisord, same as the original Dockerfile
+CMD ["supervisord", "-c", "deploy/docker/supervisord.conf"]
