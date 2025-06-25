@@ -2,73 +2,65 @@
 
 name: Build and Push to Docker Hub
 
-# 触发工作流的事件
 on:
-  # 当有代码推送到 main 分支时触发
   push:
     branches: [ "main" ]
-  # 允许您在 Actions 标签页手动触发此工作流
   workflow_dispatch:
 
 jobs:
   build-and-push:
-    # 使用最新的 Ubuntu 虚拟机运行此任务
     runs-on: ubuntu-latest
     
     steps:
-      # 第一步：检出您的仓库代码
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # 第二步：设置 QEMU 以便在 amd64 的 runner 上构建 arm64 镜像
-      # 这是多平台构建的关键前置步骤
+      - name: 释放Ubuntu磁盘空间
+        uses: jlumbroso/free-disk-space@main
+        with:
+          # this might remove tools that are actually needed,
+          # if set to "true" but frees about 6 GB
+          tool-cache: true
+          # all of these default to true, but feel free to set to
+          # "false" if necessary for your workflow
+          android: true
+          dotnet: true
+          haskell: true
+          large-packages: true
+          swap-storage: true
+
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
 
-      # 第三步：设置 Docker Buildx，以便使用缓存等高级功能
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      # 第四步：登录到 Docker Hub
-      # 使用您在 GitHub Secrets 中设置的用户名和 Token
       - name: Log in to Docker Hub
         uses: docker/login-action@v3
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
-      # 第五步：提取 Docker 元数据（如标签）
-      # 这会自动为您的镜像创建标签，例如 'latest', 'sha-xxxxxxx'
       - name: Extract metadata (tags, labels) for Docker
         id: meta
         uses: docker/metadata-action@v5
         with:
-          # 镜像名建议与项目名保持一致
           images: ${{ secrets.DOCKERHUB_USERNAME }}/crawl4ai
           tags: |
-            # 1. 当事件是推送到默认分支 (通常是'main') 时，生成 'latest' 标签
             type=raw,value=latest,enable={{is_default_branch}}
-            # 2. 同时，保留按分支名生成标签的规则
-            type=ref,event=branch
-            # 3. 额外增加一个按 commit SHA 生成的标签，用于精确追踪版本
             type=sha,prefix=,suffix=,format=short
 
-      # 第六步：构建 Docker 镜像并推送到 Docker Hub (核心优化部分)
       - name: Build and push Docker image
         uses: docker/build-push-action@v5
         with:
           context: .
-          # 开启推送，在 push 到 main 分支时生效
           push: ${{ github.event_name != 'pull_request' }}
-          # 【优化点 1】指定要构建的平台
           platforms: linux/amd64,linux/arm64
-          # 【优化点 2】添加构建参数
+          # 【核心修改】现在我们可以安全地使用 'all'，因为多阶段构建会丢弃构建工具
           build-args: |
             INSTALL_TYPE=all
             ENABLE_GPU=false
-          # 使用上一步生成的标签和标签
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-          # 启用 GitHub Actions 的构建缓存，以加快后续构建速度
           cache-from: type=gha
           cache-to: type=gha,mode=max
